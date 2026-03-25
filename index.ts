@@ -255,34 +255,36 @@ async function syncOneTarget(
     }
 }
 
-async function main(): Promise<void> {
-    const options: SyncOptions = {
-        username: process.env.QBT_USERNAME || "",
-        password: process.env.QBT_PASSWORD || "",
-        main: { name: "main", baseUrl: process.env.QBT_MAIN_BASE_URL || "" },
-        targets: [
-            { name: "mirror-1", baseUrl: process.env.QBT_MIRROR_1_BASE_URL || "" },
-            { name: "mirror-2", baseUrl: process.env.QBT_MIRROR_2_BASE_URL || "" },
-        ],
-        preserveSavePath: true,
-        skipChecking: true,
-        paused: false,
-        dryRun: false,
-        defaultCategory: "ratio"
-    };
+async function main() {
+    setInterval(async () => {
+        const options: SyncOptions = {
+            username: process.env.QBT_USERNAME || "",
+            password: process.env.QBT_PASSWORD || "",
+            main: { name: "main", baseUrl: process.env.QBT_MAIN_BASE_URL || "" },
+            targets: [
+                { name: "mirror-1", baseUrl: process.env.QBT_MIRROR_1_BASE_URL || "" },
+                { name: "mirror-2", baseUrl: process.env.QBT_MIRROR_2_BASE_URL || "" },
+            ],
+            preserveSavePath: true,
+            skipChecking: true,
+            paused: false,
+            dryRun: false,
+            defaultCategory: "ratio"
+        };
 
-    const mainClient = new QBClient(options.main);
-    const targets = options.targets.map((t) => new QBClient(t));
+        const mainClient = new QBClient(options.main);
+        const targets = options.targets.map((t) => new QBClient(t));
 
-    await mainClient.login(options.username, options.password);
-    const mainCompleted = await mainClient.getCompletedTorrents();
+        await mainClient.login(options.username, options.password);
+        const mainCompleted = await mainClient.getCompletedTorrents();
 
-    for (const target of targets) {
-        await target.login(options.username, options.password);
-        await syncOneTarget(mainClient, target, mainCompleted, options);
-    }
+        for (const target of targets) {
+            await target.login(options.username, options.password);
+            await syncOneTarget(mainClient, target, mainCompleted, options);
+        }
 
-    console.log("Done.");
+        console.log("Done.");
+    }, 60_000);
 }
 
 main().catch((err) => {
