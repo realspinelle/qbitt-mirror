@@ -256,39 +256,43 @@ async function syncOneTarget(
 }
 
 async function main() {
-    setInterval(async () => {
-        const options: SyncOptions = {
-            username: process.env.QBT_USERNAME || "",
-            password: process.env.QBT_PASSWORD || "",
-            main: { name: "main", baseUrl: process.env.QBT_MAIN_BASE_URL || "" },
-            targets: [
-                { name: "mirror-1", baseUrl: process.env.QBT_MIRROR_1_BASE_URL || "" },
-                { name: "mirror-2", baseUrl: process.env.QBT_MIRROR_2_BASE_URL || "" },
-                { name: "mirror-3", baseUrl: process.env.QBT_MIRROR_3_BASE_URL || "" },
-                { name: "mirror-4", baseUrl: process.env.QBT_MIRROR_4_BASE_URL || "" },
-            ],
-            preserveSavePath: true,
-            skipChecking: true,
-            paused: false,
-            dryRun: false,
-            defaultCategory: "ratio"
-        };
+    const options: SyncOptions = {
+        username: process.env.QBT_USERNAME || "",
+        password: process.env.QBT_PASSWORD || "",
+        main: { name: "main", baseUrl: process.env.QBT_MAIN_BASE_URL || "" },
+        targets: [
+            { name: "mirror-1", baseUrl: process.env.QBT_MIRROR_1_BASE_URL || "" },
+            { name: "mirror-2", baseUrl: process.env.QBT_MIRROR_2_BASE_URL || "" },
+            { name: "mirror-3", baseUrl: process.env.QBT_MIRROR_3_BASE_URL || "" },
+            { name: "mirror-4", baseUrl: process.env.QBT_MIRROR_4_BASE_URL || "" },
+        ],
+        preserveSavePath: true,
+        skipChecking: true,
+        paused: false,
+        dryRun: false,
+        defaultCategory: "ratio"
+    };
 
-        const mainClient = new QBClient(options.main);
-        const targets = options.targets.map((t) => new QBClient(t));
+    const mainClient = new QBClient(options.main);
+    const targets = options.targets.map((t) => new QBClient(t));
 
-        await mainClient.login(options.username, options.password);
-        const mainCompleted = await mainClient.getCompletedTorrents();
+    await mainClient.login(options.username, options.password);
+    const mainCompleted = await mainClient.getCompletedTorrents();
 
-        for (const target of targets) {
-            await target.login(options.username, options.password);
-            await syncOneTarget(mainClient, target, mainCompleted, options);
-        }
+    for (const target of targets) {
+        await target.login(options.username, options.password);
+        await syncOneTarget(mainClient, target, mainCompleted, options);
+    }
 
-        console.log("Done.");
-    }, 15 * 60 * 1000);
+    console.log("Done.");
 }
 
+setInterval(async () => {
+    main().catch((err) => {
+        console.error(err instanceof Error ? err.message : err);
+        process.exit(1);
+    });
+}, 15 * 60 * 1000);
 main().catch((err) => {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
