@@ -284,7 +284,7 @@ async function main() {
         }
 
         console.log("Done.");
-    }, 60_000);
+    }, 15 * 60 * 1000);
 }
 
 main().catch((err) => {
