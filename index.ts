@@ -325,6 +325,8 @@ async function main() {
         targets: [
             { name: "mirror-1", baseUrl: process.env.QBT_MIRROR_1_BASE_URL || "" },
             { name: "mirror-2", baseUrl: process.env.QBT_MIRROR_2_BASE_URL || "" },
+            { name: "mirror-3", baseUrl: process.env.QBT_MIRROR_3_BASE_URL || "" },
+            { name: "mirror-4", baseUrl: process.env.QBT_MIRROR_4_BASE_URL || "" },
         ],
         preserveSavePath: true,
         skipChecking: true,
