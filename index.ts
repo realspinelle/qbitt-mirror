@@ -11,6 +11,7 @@ type TorrentInfo = {
     name: string;
     save_path?: string;
     state?: string;
+    private?: boolean | 0 | 1;
 };
 
 type SyncOptions = {
@@ -49,6 +50,10 @@ function extractSidCookie(setCookieHeader: string[] | undefined): string | null 
 function isStoppedTorrentState(state: string | undefined): boolean {
     if (!state) return false;
     return state.startsWith("paused") || state.startsWith("stopped");
+}
+
+function isPrivateTorrent(torrent: TorrentInfo): boolean {
+    return torrent.private === true || torrent.private === 1;
 }
 
 function formatError(err: unknown): string {
@@ -259,8 +264,8 @@ class QBClient {
 async function syncOneTarget(
     mainClient: QBClient,
     targetClient: QBClient,
-    mainCompleted: TorrentInfo[],
-    mainAll: TorrentInfo[],
+    mainCompletedPrivate: TorrentInfo[],
+    mainAllPrivate: TorrentInfo[],
     options: SyncOptions
 ): Promise<TargetSyncStats> {
     const stats: TargetSyncStats = {
@@ -282,7 +287,7 @@ async function syncOneTarget(
 
     const targetHashes = new Set(targetTorrents.map((t) => t.hash.toLowerCase()));
 
-    for (const torrent of mainCompleted) {
+    for (const torrent of mainCompletedPrivate) {
         const hash = torrent.hash.toLowerCase();
 
         if (targetHashes.has(hash)) {
@@ -315,15 +320,15 @@ async function syncOneTarget(
         }
     }
 
-    const mainStoppedHashes = new Set(
-        mainAll
+    const mainStoppedPrivateHashes = new Set(
+        mainAllPrivate
             .filter((torrent) => isStoppedTorrentState(torrent.state))
             .map((torrent) => torrent.hash.toLowerCase())
     );
 
     const hashesToStopOnTarget = targetTorrents
         .map((torrent) => torrent.hash.toLowerCase())
-        .filter((hash) => mainStoppedHashes.has(hash));
+        .filter((hash) => mainStoppedPrivateHashes.has(hash));
 
     if (hashesToStopOnTarget.length > 0) {
         if (options.dryRun) {
@@ -352,6 +357,10 @@ function logRunSummary(statsList: TargetSyncStats[], dryRun: boolean): void {
     );
 
     for (const stats of statsList) {
+        if (stats.added === 0 && stats.stopped === 0 && stats.errors.length === 0) {
+            continue;
+        }
+
         console.log(
             `- ${stats.targetName}: added=${stats.added} stopped=${stats.stopped} skipped=${stats.skippedExisting} errors=${stats.errors.length}`
         );
@@ -385,17 +394,26 @@ async function main() {
 
     await mainClient.login(options.username, options.password);
 
-    const [mainCompleted, mainAll] = await Promise.all([
+    const [mainCompletedRaw, mainAllRaw] = await Promise.all([
         mainClient.getCompletedTorrents(),
         mainClient.getAllTorrents(),
     ]);
+
+    const mainCompletedPrivate = mainCompletedRaw.filter(isPrivateTorrent);
+    const mainAllPrivate = mainAllRaw.filter(isPrivateTorrent);
 
     const statsList: TargetSyncStats[] = [];
 
     for (const target of targets) {
         try {
             await target.login(options.username, options.password);
-            const stats = await syncOneTarget(mainClient, target, mainCompleted, mainAll, options);
+            const stats = await syncOneTarget(
+                mainClient,
+                target,
+                mainCompletedPrivate,
+                mainAllPrivate,
+                options
+            );
             statsList.push(stats);
         } catch (err) {
             statsList.push({
