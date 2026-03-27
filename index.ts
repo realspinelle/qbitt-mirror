@@ -10,6 +10,7 @@ type TorrentInfo = {
     hash: string;
     name: string;
     save_path?: string;
+    state?: string;
 };
 
 type SyncOptions = {
@@ -35,6 +36,33 @@ function extractSidCookie(setCookieHeader: string[] | undefined): string | null 
         if (match) return `SID=${match[1]}`;
     }
     return null;
+}
+
+function isStoppedTorrentState(state: string | undefined): boolean {
+    if (!state) return false;
+
+    return new Set([
+        "pausedUP",
+        "pausedDL",
+        "stoppedUP",
+        "stoppedDL",
+        "queuedUP",
+        "queuedDL",
+        "checkingUP",
+        "checkingDL",
+        "stalledUP",
+        "forcedUP",
+        "uploading",
+        "downloading",
+        "metaDL",
+        "checkingResumeData",
+        "moving",
+        "error",
+        "missingFiles",
+        "unknown",
+    ]).has(state)
+        ? state.startsWith("paused") || state.startsWith("stopped")
+        : state.startsWith("paused") || state.startsWith("stopped");
 }
 
 class QBClient {
@@ -217,12 +245,36 @@ class QBClient {
             throw new Error(`[${this.name}] failed to add torrent: HTTP ${res.status} body=${bodyText}`);
         }
     }
+
+    async stopTorrents(hashes: string[]): Promise<void> {
+        if (hashes.length === 0) return;
+
+        const body = new URLSearchParams({
+            hashes: hashes.join("|"),
+        }).toString();
+
+        const res = await this.request<string>({
+            method: "POST",
+            url: "/api/v2/torrents/stop",
+            data: body,
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            responseType: "text",
+        });
+
+        if (res.status !== 200) {
+            const bodyText = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
+            throw new Error(`[${this.name}] failed to stop torrents: HTTP ${res.status} body=${bodyText}`);
+        }
+    }
 }
 
 async function syncOneTarget(
     mainClient: QBClient,
     targetClient: QBClient,
     mainCompleted: TorrentInfo[],
+    mainAll: TorrentInfo[],
     options: SyncOptions
 ): Promise<void> {
     console.log(`\n=== Syncing to ${targetClient.name} (${targetClient.baseUrl}) ===`);
@@ -253,6 +305,29 @@ async function syncOneTarget(
 
         console.log(`[OK] added "${torrent.name}" to ${targetClient.name}`);
     }
+
+    const mainStoppedHashes = new Set(
+        mainAll
+            .filter((torrent) => isStoppedTorrentState(torrent.state))
+            .map((torrent) => torrent.hash.toLowerCase())
+    );
+
+    const hashesToStopOnTarget = targetTorrents
+        .map((torrent) => torrent.hash.toLowerCase())
+        .filter((hash) => mainStoppedHashes.has(hash));
+
+    if (hashesToStopOnTarget.length > 0) {
+        if (options.dryRun) {
+            console.log(
+                `[DRY RUN] would stop ${hashesToStopOnTarget.length} torrent(s) on ${targetClient.name}`
+            );
+        } else {
+            await targetClient.stopTorrents(hashesToStopOnTarget);
+            console.log(
+                `[OK] stopped ${hashesToStopOnTarget.length} torrent(s) on ${targetClient.name} because they are stopped on main`
+            );
+        }
+    }
 }
 
 async function main() {
@@ -270,7 +345,7 @@ async function main() {
         skipChecking: true,
         paused: false,
         dryRun: false,
-        defaultCategory: "ratio"
+        defaultCategory: "ratio",
     };
 
     const mainClient = new QBClient(options.main);
@@ -278,10 +353,11 @@ async function main() {
 
     await mainClient.login(options.username, options.password);
     const mainCompleted = await mainClient.getCompletedTorrents();
+    const mainAll = await mainClient.getAllTorrents();
 
     for (const target of targets) {
         await target.login(options.username, options.password);
-        await syncOneTarget(mainClient, target, mainCompleted, options);
+        await syncOneTarget(mainClient, target, mainCompleted, mainAll, options);
     }
 
     console.log("Done.");
@@ -293,6 +369,7 @@ setInterval(async () => {
         process.exit(1);
     });
 }, 15 * 60 * 1000);
+
 main().catch((err) => {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
