@@ -318,22 +318,43 @@ function logRunSummary(stats: TargetSyncStats[]) {
 }
 
 async function main() {
-    const options: SyncOptions = {
+    let options: SyncOptions = {
         username: process.env.QBT_USERNAME || "",
         password: process.env.QBT_PASSWORD || "",
         main: { name: "main", baseUrl: process.env.QBT_MAIN_BASE_URL || "" },
-        targets: [
-            { name: "mirror-1", baseUrl: process.env.QBT_MIRROR_1_BASE_URL || "" },
-            { name: "mirror-2", baseUrl: process.env.QBT_MIRROR_2_BASE_URL || "" },
-            { name: "mirror-3", baseUrl: process.env.QBT_MIRROR_3_BASE_URL || "" },
-            { name: "mirror-4", baseUrl: process.env.QBT_MIRROR_4_BASE_URL || "" },
-        ],
+        targets: [],
         preserveSavePath: true,
         skipChecking: true,
         paused: false,
         dryRun: false,
         defaultCategory: "ratio",
     };
+
+    if (process.env.QBT_MIRROR_1_BASE_URL) {
+        options.targets.push({
+            name: "mirror-1",
+            baseUrl: process.env.QBT_MIRROR_1_BASE_URL || ""
+        });
+    }
+    if (process.env.QBT_MIRROR_2_BASE_URL) {
+        options.targets.push({
+            name: "mirror-2",
+            baseUrl: process.env.QBT_MIRROR_2_BASE_URL || ""
+        });
+    }
+    if (process.env.QBT_MIRROR_3_BASE_URL) {
+        options.targets.push({
+            name: "mirror-3",
+            baseUrl: process.env.QBT_MIRROR_3_BASE_URL || ""
+        });
+    }
+    if (process.env.QBT_MIRROR_4_BASE_URL) {
+        options.targets.push({
+            name: "mirror-4",
+            baseUrl: process.env.QBT_MIRROR_4_BASE_URL || ""
+        });
+    }
+
 
     const mainClient = new QBClient(options.main);
     await mainClient.login(options.username, options.password);
