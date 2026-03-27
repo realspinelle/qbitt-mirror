@@ -25,6 +25,14 @@ type SyncOptions = {
     defaultCategory: string;
 };
 
+type TargetSyncStats = {
+    targetName: string;
+    added: number;
+    stopped: number;
+    skippedExisting: number;
+    errors: string[];
+};
+
 function normalizeBaseUrl(url: string): string {
     return url.replace(/\/+$/, "");
 }
@@ -40,29 +48,11 @@ function extractSidCookie(setCookieHeader: string[] | undefined): string | null 
 
 function isStoppedTorrentState(state: string | undefined): boolean {
     if (!state) return false;
+    return state.startsWith("paused") || state.startsWith("stopped");
+}
 
-    return new Set([
-        "pausedUP",
-        "pausedDL",
-        "stoppedUP",
-        "stoppedDL",
-        "queuedUP",
-        "queuedDL",
-        "checkingUP",
-        "checkingDL",
-        "stalledUP",
-        "forcedUP",
-        "uploading",
-        "downloading",
-        "metaDL",
-        "checkingResumeData",
-        "moving",
-        "error",
-        "missingFiles",
-        "unknown",
-    ]).has(state)
-        ? state.startsWith("paused") || state.startsWith("stopped")
-        : state.startsWith("paused") || state.startsWith("stopped");
+function formatError(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
 }
 
 class QBClient {
@@ -153,15 +143,11 @@ class QBClient {
         }
 
         if (!bodyText.includes("Ok")) {
-            throw new Error(
-                `[${this.name}] login returned HTTP 200 but not success. body=${bodyText}`
-            );
+            throw new Error(`[${this.name}] login returned HTTP 200 but not success. body=${bodyText}`);
         }
 
         if (!this.sidCookie) {
-            throw new Error(
-                `[${this.name}] login appeared successful but no SID cookie was returned`
-            );
+            throw new Error(`[${this.name}] login appeared successful but no SID cookie was returned`);
         }
     }
 
@@ -276,34 +262,57 @@ async function syncOneTarget(
     mainCompleted: TorrentInfo[],
     mainAll: TorrentInfo[],
     options: SyncOptions
-): Promise<void> {
-    console.log(`\n=== Syncing to ${targetClient.name} (${targetClient.baseUrl}) ===`);
+): Promise<TargetSyncStats> {
+    const stats: TargetSyncStats = {
+        targetName: targetClient.name,
+        added: 0,
+        stopped: 0,
+        skippedExisting: 0,
+        errors: [],
+    };
 
-    const targetTorrents = await targetClient.getAllTorrents();
+    let targetTorrents: TorrentInfo[] = [];
+
+    try {
+        targetTorrents = await targetClient.getAllTorrents();
+    } catch (err) {
+        stats.errors.push(formatError(err));
+        return stats;
+    }
+
     const targetHashes = new Set(targetTorrents.map((t) => t.hash.toLowerCase()));
 
     for (const torrent of mainCompleted) {
         const hash = torrent.hash.toLowerCase();
-        if (targetHashes.has(hash)) continue;
+
+        if (targetHashes.has(hash)) {
+            stats.skippedExisting++;
+            continue;
+        }
 
         const savePath = options.preserveSavePath ? torrent.save_path : undefined;
 
         if (options.dryRun) {
-            console.log(`[DRY RUN] would add "${torrent.name}" to ${targetClient.name}`);
+            stats.added++;
             continue;
         }
 
-        const torrentFile = await mainClient.exportTorrent(hash);
-        await targetClient.addTorrentFile({
-            torrentFile,
-            filename: `${hash}.torrent`,
-            savePath,
-            skipChecking: options.skipChecking,
-            paused: options.paused,
-            category: options.defaultCategory,
-        });
+        try {
+            const torrentFile = await mainClient.exportTorrent(hash);
 
-        console.log(`[OK] added "${torrent.name}" to ${targetClient.name}`);
+            await targetClient.addTorrentFile({
+                torrentFile,
+                filename: `${hash}.torrent`,
+                savePath,
+                skipChecking: options.skipChecking,
+                paused: options.paused,
+                category: options.defaultCategory,
+            });
+
+            stats.added++;
+        } catch (err) {
+            stats.errors.push(`add ${torrent.name} (${hash}): ${formatError(err)}`);
+        }
     }
 
     const mainStoppedHashes = new Set(
@@ -318,14 +327,37 @@ async function syncOneTarget(
 
     if (hashesToStopOnTarget.length > 0) {
         if (options.dryRun) {
-            console.log(
-                `[DRY RUN] would stop ${hashesToStopOnTarget.length} torrent(s) on ${targetClient.name}`
-            );
+            stats.stopped = hashesToStopOnTarget.length;
         } else {
-            await targetClient.stopTorrents(hashesToStopOnTarget);
-            console.log(
-                `[OK] stopped ${hashesToStopOnTarget.length} torrent(s) on ${targetClient.name} because they are stopped on main`
-            );
+            try {
+                await targetClient.stopTorrents(hashesToStopOnTarget);
+                stats.stopped = hashesToStopOnTarget.length;
+            } catch (err) {
+                stats.errors.push(`stop sync: ${formatError(err)}`);
+            }
+        }
+    }
+
+    return stats;
+}
+
+function logRunSummary(statsList: TargetSyncStats[], dryRun: boolean): void {
+    const totalAdded = statsList.reduce((sum, s) => sum + s.added, 0);
+    const totalStopped = statsList.reduce((sum, s) => sum + s.stopped, 0);
+    const totalSkipped = statsList.reduce((sum, s) => sum + s.skippedExisting, 0);
+    const totalErrors = statsList.reduce((sum, s) => sum + s.errors.length, 0);
+
+    console.log(
+        `${dryRun ? "[DRY RUN] " : ""}Sync done | added=${totalAdded} stopped=${totalStopped} skipped=${totalSkipped} errors=${totalErrors}`
+    );
+
+    for (const stats of statsList) {
+        console.log(
+            `- ${stats.targetName}: added=${stats.added} stopped=${stats.stopped} skipped=${stats.skippedExisting} errors=${stats.errors.length}`
+        );
+
+        for (const err of stats.errors) {
+            console.error(`  error: ${err}`);
         }
     }
 }
@@ -352,25 +384,43 @@ async function main() {
     const targets = options.targets.map((t) => new QBClient(t));
 
     await mainClient.login(options.username, options.password);
-    const mainCompleted = await mainClient.getCompletedTorrents();
-    const mainAll = await mainClient.getAllTorrents();
+
+    const [mainCompleted, mainAll] = await Promise.all([
+        mainClient.getCompletedTorrents(),
+        mainClient.getAllTorrents(),
+    ]);
+
+    const statsList: TargetSyncStats[] = [];
 
     for (const target of targets) {
-        await target.login(options.username, options.password);
-        await syncOneTarget(mainClient, target, mainCompleted, mainAll, options);
+        try {
+            await target.login(options.username, options.password);
+            const stats = await syncOneTarget(mainClient, target, mainCompleted, mainAll, options);
+            statsList.push(stats);
+        } catch (err) {
+            statsList.push({
+                targetName: target.name,
+                added: 0,
+                stopped: 0,
+                skippedExisting: 0,
+                errors: [formatError(err)],
+            });
+        }
     }
 
-    console.log("Done.");
+    logRunSummary(statsList, options.dryRun);
 }
 
 setInterval(async () => {
-    main().catch((err) => {
-        console.error(err instanceof Error ? err.message : err);
+    try {
+        await main();
+    } catch (err) {
+        console.error(`fatal: ${formatError(err)}`);
         process.exit(1);
-    });
+    }
 }, 15 * 60 * 1000);
 
 main().catch((err) => {
-    console.error(err instanceof Error ? err.message : err);
+    console.error(`fatal: ${formatError(err)}`);
     process.exit(1);
 });
