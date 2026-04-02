@@ -100,6 +100,7 @@ class QBClient {
         const res = await this.http.request<T>({
             ...args,
             headers: { ...this.getHeaders(), ...(args.headers ?? {}) },
+            timeout: 30_000
         });
 
         const sid = extractSidCookie(res.headers["set-cookie"]);
@@ -383,7 +384,6 @@ async function main() {
     const targetTorrentsPromises = targetClients.map(c => c.getAllTorrents());
     const targetTorrentsArrays = await Promise.all(targetTorrentsPromises);
 
-    // Collect all unique hashes that need to be added
     const hashesToAdd = new Set<string>();
     for (let i = 0; i < targetClients.length; i++) {
         const targetTorrents = targetTorrentsArrays[i];
@@ -398,15 +398,14 @@ async function main() {
         }
     }
 
-    // Export torrent files in parallel
+    // Export torrent files sequentially (to avoid overloading qBittorrent)
     const torrentBuffers = new Map<string, Buffer>();
-    const exportPromises = Array.from(hashesToAdd).map(hash =>
-        mainClient.exportTorrent(hash).then(buffer => ({ hash, buffer }))
-    );
-    const exported = await Promise.all(exportPromises);
-    for (const { hash, buffer } of exported) {
+    for (const hash of hashesToAdd) {
+        const buffer = await mainClient.exportTorrent(hash);
         torrentBuffers.set(hash, buffer);
     }
+
+    console.log(torrentBuffers);
 
     // Sync each target
     const results: TargetSyncStats[] = [];
