@@ -12,6 +12,7 @@ type TorrentInfo = {
     save_path?: string;
     state?: string;
     private?: boolean | 0 | 1;
+    progress?: number;
 };
 
 type SyncOptions = {
@@ -203,6 +204,7 @@ async function syncOneTarget(
     targetClient: QBClient,
     mainCompletedPrivate: TorrentInfo[],
     mainAllPrivate: TorrentInfo[],
+    torrentBuffers: Map<string, Buffer>,
     options: SyncOptions
 ): Promise<TargetSyncStats> {
     const stats: TargetSyncStats = {
@@ -236,7 +238,11 @@ async function syncOneTarget(
         }
 
         try {
-            const file = await mainClient.exportTorrent(hash);
+            const file = torrentBuffers.get(hash);
+            if (!file) {
+                stats.errors.push(`add ${torrent.name}: torrent file not found`);
+                continue;
+            }
             await targetClient.addTorrentFile({
                 torrentFile: file,
                 filename: `${hash}.torrent`,
@@ -359,28 +365,63 @@ async function main() {
     const mainClient = new QBClient(options.main);
     await mainClient.login(options.username, options.password);
 
-    const [completed, all] = await Promise.all([
-        mainClient.getCompletedTorrents(),
-        mainClient.getAllTorrents(),
-    ]);
+    const all = await mainClient.getAllTorrents();
+    const completed = all.filter(t => t.progress === 1);
 
     const mainCompletedPrivate = completed.filter(isPrivateTorrent);
     const mainAllPrivate = all.filter(isPrivateTorrent);
 
-    const results: TargetSyncStats[] = [];
-
+    // Create and login to target clients
+    const targetClients: QBClient[] = [];
     for (const t of options.targets) {
         const client = new QBClient(t);
         await client.login(options.username, options.password);
+        targetClients.push(client);
+    }
+
+    // Get target torrents in parallel
+    const targetTorrentsPromises = targetClients.map(c => c.getAllTorrents());
+    const targetTorrentsArrays = await Promise.all(targetTorrentsPromises);
+
+    // Collect all unique hashes that need to be added
+    const hashesToAdd = new Set<string>();
+    for (let i = 0; i < targetClients.length; i++) {
+        const targetTorrents = targetTorrentsArrays[i];
+        if (!targetTorrents) continue; // Skip if failed to fetch
+
+        const targetHashes = new Set(targetTorrents.map(t => t.hash.toLowerCase()));
+        for (const torrent of mainCompletedPrivate) {
+            const hash = torrent.hash.toLowerCase();
+            if (!targetHashes.has(hash)) {
+                hashesToAdd.add(hash);
+            }
+        }
+    }
+
+    // Export torrent files in parallel
+    const torrentBuffers = new Map<string, Buffer>();
+    const exportPromises = Array.from(hashesToAdd).map(hash =>
+        mainClient.exportTorrent(hash).then(buffer => ({ hash, buffer }))
+    );
+    const exported = await Promise.all(exportPromises);
+    for (const { hash, buffer } of exported) {
+        torrentBuffers.set(hash, buffer);
+    }
+
+    // Sync each target
+    const results: TargetSyncStats[] = [];
+    for (let i = 0; i < targetClients.length; i++) {
+        const targetClient = targetClients[i];
+        if (!targetClient) continue;
 
         const stats = await syncOneTarget(
             mainClient,
-            client,
+            targetClient,
             mainCompletedPrivate,
             mainAllPrivate,
+            torrentBuffers,
             options
         );
-
         results.push(stats);
     }
 
