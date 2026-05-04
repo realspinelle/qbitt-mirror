@@ -1,5 +1,9 @@
 import axios, { type AxiosInstance, type AxiosResponse } from "axios";
 import FormData from "form-data";
+import { promisify } from "util";
+import { gunzip } from "zlib";
+import fs from "fs/promises"
+import path from "path";
 
 type InstanceConfig = {
     name: string;
@@ -362,7 +366,6 @@ async function main() {
         });
     }
 
-
     const mainClient = new QBClient(options.main);
     await mainClient.login(options.username, options.password);
 
@@ -427,5 +430,22 @@ async function main() {
     logRunSummary(results);
 }
 
+async function blockListUpdater() {
+    if (process.env.BLOCK_LIST_PATH) {
+        const gunzipAsync = promisify(gunzip);
+        const list = await axios.get("http://list.iblocklist.com/?list=fr&fileformat=p2p&archiveformat=gz", {
+            headers: {
+                'User-Agent': 'curl/8.7.1'
+            },
+            responseType: 'arraybuffer'
+        });
+
+        const decompressed = await gunzipAsync(Buffer.from(list.data));
+        const text = decompressed.toString('utf-8');
+        await fs.writeFile(path.join(process.env.BLOCK_LIST_PATH + "blocklist.p2p"), text)
+    }
+}
+
 setInterval(main, 15 * 60 * 1000);
+setInterval(blockListUpdater, 12 * 60 * 60 * 1000);
 main();
