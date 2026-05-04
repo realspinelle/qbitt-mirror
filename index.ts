@@ -449,3 +449,4 @@ async function blockListUpdater() {
 setInterval(main, 15 * 60 * 1000);
 setInterval(blockListUpdater, 12 * 60 * 60 * 1000);
 main();
+blockListUpdater();
